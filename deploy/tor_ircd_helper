@@ -1,0 +1,14 @@
+#!/bin/sh
+apt-get install tor
+{
+	echo "HiddenServiceDir /var/lib/tor/ircd"
+	echo "HiddenServicePort 6667 unix:/etc/tor/unrealircd/tor_ircd.socket"
+	echo "HiddenServicePort 6697 unix:/etc/tor/unrealircd/tor_tls_ircd.socket"
+	echo "#MapAddress irc.supernets.org changeme.onion"
+} > /etc/tor/torrc
+mkdir /etc/tor/unrealircd
+chown unrealircd:debian-tor /etc/tor/unrealircd
+chmod 750 /etc/tor/unrealircd
+systemctl restart tor.service && systemctl enable tor.service
+cat /var/lib/tor/ircd/hostname
+echo "MapAddress irc1.example.net xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.onion" >> /etc/tor/torrc

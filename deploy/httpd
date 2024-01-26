@@ -1,0 +1,59 @@
+#!/bin/sh
+# SuperNETs tool for nginx deployment - Developed by acidvegas (https://git.acid.vegas/supertools)
+HUB="changeme"
+USERNAME=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
+PASSWORD=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
+PORT="changeme"
+
+setup_home() {
+	mkdir $HOME/www
+	wget -O $HOME/www/badwords.conf   https://raw.githubusercontent.com/supernets/unrealircd/master/doc/conf/badwords.conf
+	wget -O $HOME/www/except.conf     https://raw.githubusercontent.com/supernets/unrealircd/master/doc/conf/except.conf
+	wget -O $HOME/www/ircd.conf       https://raw.githubusercontent.com/supernets/unrealircd/master/doc/conf/unrealircd.remote.conf # edit this
+	wget -O $HOME/www/modules.conf    https://raw.githubusercontent.com/supernets/unrealircd/master/doc/conf/modules.conf
+	wget -O $HOME/www/opers.conf      https://raw.githubusercontent.com/supernets/unrealircd/master/doc/conf/opers.conf             # edit this
+	wget -O $HOME/www/spamfilter.conf https://raw.githubusercontent.com/supernets/unrealircd/master/doc/conf/spamfilter.conf
+	chown -R acidvegas:acidvegas $HOME/www && chmod -R 755 $HOME/www
+}
+
+setup_nginx() {
+	}
+		echo "http {"
+		echo "\taccess_log off;"
+		echo "\tsendfile on;"
+		echo "\tsendfile_max_chunk 1m;"
+		echo "\tserver_tokens off;"
+		echo "\tserver {"
+		echo "\t\tlisten [::]:$PORT ssl http2;"
+		echo "\t\tlisten $PORT ssl http2;"
+		echo "\t\troot /home/acidvegas/www;"
+		echo "\t\tserver_name $HUB;"
+		echo "\t\tcharset UTF-8;"
+		echo "\t\tsatisfy all;"
+		echo "\t\tallow 1.1.1.1; # link 1"
+		echo "\t\tallow 1.1.1.2; # link 2"
+		echo "\t\tallow 1.1.1.3; # link 3"
+		echo "\t\tdeny all;"
+		echo "\t\tauth_basic \"Restricted\";"
+		echo "\t\tauth_basic_user_file /etc/nginx/.htpasswd;"
+		echo "\t\tssl_certificate /etc/letsencrypt/live/$HUB/fullchain.pem;"
+		echo "\t\tssl_certificate_key /etc/letsencrypt/live/$HUB/privkey.pem;"
+		echo "\t\tssl_session_tickets off;"
+		echo "\t}"
+		echo "}"
+	} > /etc/nginx/nginx.conf
+	echo "$USERNAME:$(openssl passwd -apr1 $PASSWORD)\n" > /etc/nginx/.htpasswd
+	systemctl enable nginx && systemctl start nginx
+}
+
+setup_certbot() {
+	certbot certonly --standalone -d $HUB -m admin@supernets.org # fix this
+	echo -e "[Unit]\nDescription=cerbot renewal\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/certbot renew -n --quiet --agree-tos --deploy-hook systemctl restart nginx" > /etc/systemd/system/certbot.service
+	echo -e "[Unit]\nDescription=cerbot renewal timer\n\n[Timer]\nOnCalendar=0/12:00:00\nRandomizedDelaySec=1h\nPersistent=true\n\n[Install]\nWantedBy=timers.target" > /etc/systemd/system/certbot.timer
+	systemctl enable certbot.timer && systemctl start certbot.timer
+}
+
+setup_home
+setup_nginx
+setup_certbot
+echo "Remote include: https://$USERNAME:$PASSWORD@$HUB:$PORT/"

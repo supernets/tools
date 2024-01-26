@@ -1,0 +1,78 @@
+#!/bin/sh
+# SuperNETs tool for UnrealIRCd deployment - Developed by acidvegas (https://git.acid.vegas/supertools)
+# debian deployment: apt-get install build-essential pkg-config gdb libssl-dev libpcre2-dev libargon2-0-dev libsodium-dev libc-ares-dev libcurl4-openssl-dev
+
+UNREAL=$HOME/unrealircd
+SOURCE=$UNREAL.source
+
+for pkg in curl git jq make; do
+    if ! command -v $pkg > /dev/null; then
+        echo "error: missing required package '$pkg'"
+        exit 1
+    fi
+done
+
+case "$1" in
+	check)
+		[ ! $(command -v   jq) ] && echo "error: missing required package 'jq'"   && exit 1
+		CURRENT=$($UNREAL/unrealircd version | cut -d'-' -f2)
+		LATEST=$(curl -s https://www.unrealircd.org/downloads/list.json | jq '[.[]][1].Stable.version')
+		[ ! $CURRENT = $LATEST ] && echo "new version available: $LATEST"
+		;;
+
+	distcert)
+		for link in cowboy contra omega omni phish; do # Make this an arguement instead of hardcoded
+    		scp irc.* $link:unrealircd/conf/tls
+    		ssh $1 unrealircd/unrealircd rehash && unrealircd/unrealircd reloadtls
+		done
+		;;
+
+	deploy)
+		git clone --depth 1 https://github.com/supernets/unrealircd.git $SOURCE
+		cd $SOURCE && echo -e "\n" | ./Config -nointro && make && make install && cd $HOME && rm -rf $SOURCE
+		rm $UNREAL/conf/*.conf
+		read -p "Link Name: " NAME
+		SID=$(cat /dev/urandom | tr -dc '0-9' | fold -w 256 | head -n 1 | head --bytes 1)$(cat /dev/urandom | tr -dc 'A-Z0-9' | fold -w 2 | head -n 1)
+		read -p "Remote Include: " REMOTE
+		for item in badwords except ircd modules opers snomasks spamfilter; do echo "include \"$REMOTE/$item.conf\";" >> $UNREAL/conf/unrealircd.conf; done
+		echo "me { name \"$NAME.supernets.org\"; info \"SuperNETs IRC Network\"; sid $SID; }" >> $UNREAL/conf/unrealircd.conf
+		$UNREAL/unrealircd start &
+		if [ $(command -v crontab) ]; then
+			crontab -l | { cat; echo "*/5 * * * * $HOME/unrealircd/unrealircd croncheck"; } | crontab -
+			crontab -l | { cat; echo "@reboot     $HOME/unrealircd/unrealircd croncheck"; } | crontab -
+		elif [ $(command -v systemctl) ]; then
+			echo -e "[Unit]\nDescription=UnrealIRCd Cron Check Timer\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec=5min\n\n[Install]\nWantedBy=timers.target" > $HOME/.config/systemd/user/unreal.timer
+			echo -e "[Unit]\nDescription=UnrealIRCd Cron Check Service\n\n[Service]\nType=oneshot\nExecStart=$HOME/unrealircd/unrealircd croncheck"         > $HOME/.config/systemd/user/unreal.service
+			systemctl --user enable unreal.timer && systemctl --user start unreal.timer
+		else
+			echo "warning: cron/systemd not found on system! (reboot/restart timers not set)"
+		fi
+		$UNREAL/unrealircd spkifp | tail -n2 | head -1
+		curl -4 icanhazip.com && curl -6 icanhazip.com
+		;;
+
+	source)
+		wget -O $SOURCE.tar.gz https://www.unrealircd.org/downloads/unrealircd-latest.tar.gz
+		tar -xvf $SOURCE.tar.gz --one-top-level --strip-components=1 && rm $SOURCE.tar.gz
+		sed -i 's/NICKNAMEHISTORYLENGTH="2000"/NICKNAMEHISTORYLENGTH="100"/g' $SOURCE/Config
+		sed -i 's/REMOTEINC=""/REMOTEINC="1"/g' $SOURCE/Config
+		sed -i 's/*.default.conf/*.conf/g'  $SOURCE/Makefile.in
+		sed -i 's/*.optional.conf/*.motd/g' $SOURCE/Makefile.in
+		sed -i '/modules.sources.list/,/doc\/conf\/example/d' $SOURCE/Makefile.in
+		sed -i 's/sendnotice(target, "\*\*\* You were forced to join %s", jbuf);//g' $SOURCE/src/modules/sajoin.c
+		sed -i 's/0.organizationName_default      = IRC geeks/0.organizationName_default      = SuperNETs/g' $SOURCE/extras/tls.cnf
+		sed -i 's;//#undef FAKELAG_CONFIGURABLE;#define FAKELAG_CONFIGURABLE;g' $SOURCE/include/config.h
+		rm $SOURCE/doc/conf/* && rm $SOURCE/doc/conf/aliases && rm $SOURCE/doc/conf/examples && rm $SOURCE/doc/conf/help
+		cp $HOME/dev/git/supernets/unrealircd/doc/conf/* $SOURCE/doc/conf/
+		;;
+
+	update)
+		BACKUP=$UNREAL.backup
+		mkdir $BACKUP && cp $UNREAL/conf/unrealircd.conf $BACKUP && cp $UNREAL/conf/tls/*.pem $BACKUP && cp $UNREAL/data/*.db $BACKUP
+		git clone --depth 1 https://github.com/supernets/unrealircd.git $SOURCE
+		$UNREAL/unrealircd stop && rm -rf $UNREAL
+		cd $SOURCE && (echo -e "\n" | ./Config -nointro) && make && make install && cd $HOME && rm -rf $SOURCE
+		rm $UNREAL/conf/*.conf && mv $BACKUP/unrealircd.conf $UNREAL/conf && mv $BACKUP/*.pem $UNREAL/conf/tls && mv $BACKUP/*.db $UNREAL/data && rm -r $BACKUP
+		$UNREAL/unrealircd start &
+		;;
+esac

@@ -1,0 +1,9 @@
+#!/bin/sh
+pkill -9 -u $UID abduco
+cd $HOME/bots                   && abduco -fnr 5000         python3 5000.py         && sleep 1
+cd $HOME/bots/amber             && abduco -fnr amber        python3 amber.py        && sleep 1
+cd $HOME/bots/anythinggoes      && abduco -fnr anythinggoes python3 anythinggoes.py && sleep 1
+cd $HOME/bots                   && abduco -fnr cancer       python3 cancer.py       && sleep 1
+cd $HOME/bots/dickserv/dickserv && abduco -fnr dickserv     python3 dickserv.py     && sleep 1
+cd $HOME/bots/irccex/irccex     && abduco -fnr irccex       python3 irccex.py       && sleep 1
+cd $HOME/bots/scroll/scroll     && abduco -fnr scroll       python3 scroll.py

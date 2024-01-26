@@ -1,0 +1,138 @@
+#!/bin/sh
+# LXC Container Setup - developed by acidvegas (https://git.acid.vegas/supertools)
+
+# Configuration
+SSH_PORT=1337
+USER_NAME="supernets"
+CONTAINER_NAME="ircd"
+
+setup_root() {
+	# Secure DNS (TEMP)
+	printf "nameserver 208.67.222.222\nnameserver 208.67.220.220\nnameserver 2620:119:35::35\nnameserver 2620:119:53::53\n" > /etc/resolv.conf
+	chattr +i /etc/resolv.conf
+
+	# Update & Install Packages
+	apt-get update && apt-get upgrade
+	apt-get install bridge-utils dirmngr htop gpg lxc man net-tools uidmap screen unattended-upgrades
+
+	# Wipe the journal and only use RAM storage
+	journalctl --vacuum-time=1d
+	printf "[Journal]\nStorage=volatile\nSplitMode=none\nRuntimeMaxUse=500K\n" > /etc/systemd/journald.conf
+	systemctl restart systemd-journald
+
+	# Install & setup dropbear
+	apt-get install -y dropbear
+	{
+		echo "NO_START=0"
+		echo "DROPBEAR_PORT=$SSH_PORT"
+		echo "DROPBEAR_EXTRA_ARGS=\"-K 0\""
+		echo "DROPBEAR_BANNER=\"\""
+		echo "DROPBEAR_ED25519KEY=\"/etc/dropbear/dropbear_ed25519_host_key\""
+		echo "DROPBEAR_RECEIVE_WINDOW=65536"
+	} > /etc/default/dropbear
+	systemctl restart dropbear && systemctl enable dropbear
+
+	# Remove OpenSSH
+	apt remove openssh-server && apt remove openssh-client
+	apt purge openssh-server && apt purge openssh-client
+	apt autoremove && apt autoclean
+	systemctl stop ssh && systemctl disable ssh
+
+	# Disable history, logs, & IPv6
+	printf "\nHISTSIZE=0\nHISTFILESIZE=0\nunset HISTFILE\n" >> /etc/bash.bashrc
+	>/var/log/lastlog && chattr +i /var/log/lastlog
+	sed -i 's/GRUB_CMDLINE_LINUX=""/GRUB_CMDLINE_LINUX="ipv6.disable=1"/' /etc/default/grub && update-grub
+
+	# Set locales
+	echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && locale-gen
+
+	# Add a new user
+	useradd -m -s /bin/bash $USER_NAME && passwd $USER_NAME
+
+	# Change hostname
+	nano /etc/hostname
+
+	# Enable user-level services
+	loginctl enable-linger $USER_NAME
+
+	# Configure NAT
+	iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+	echo "1" > /proc/sys/net/ipv4/ip_forward
+	printf "\nnet.ipv4.ip_forward=1\n" > /etc/sysctl.conf
+
+	# Create a runtime directory with the correct permissions
+	mkdir -p /run/user/$(id -u $USER_NAME)
+    chown $USER_NAME:$USER_NAME /run/user/$(id -u $USER_NAME)
+    chmod 700 /run/user/$(id -u $USER_NAME)
+
+	# Set the subordinate UID/GID
+    echo "$USER_NAME:100000:65536" > /etc/subuid
+    echo "$USER_NAME:100000:65536" > /etc/subgid
+
+	# Create bridge (usually done automatically, see `ip addr` output for lxcbr0)
+	#brctl addbr lxcbr0
+	#ip addr add 192.168.1.10/24 dev lxcbr0
+	#ip link set dev lxcbr0 up
+
+	# Restart the LXC service
+	systemctl restart lxc
+}
+
+setup_user() {
+	# Add dropbear public key
+	mkdir -p $HOME/.ssh
+	printf "ssh-ed25519 loldongs acidvegas@blackhole" > $HOME/.ssh/authorized_keys
+	chmod 700 $HOME/.ssh
+	chown -R $USER $HOME/.ssh
+	chmod 400 $HOME/.ssh/authorized_keys
+	chattr +i $HOME/.ssh
+	chattr +i $HOME/.ssh/authorized_keys
+
+	# Setup LXC configuration
+	mkdir -p ~/.config/lxc
+	{
+		echo "lxc.idmap = u 0 100000 65536"
+		echo "lxc.idmap = g 0 100000 65536"
+		echo "lxc.net.0.type = veth"
+		echo "lxc.net.0.link = lxcbr0"
+		echo "lxc.net.0.flags = up"
+		echo "lxc.start.auto = 1"
+		echo "lxc.start.delay = 5"
+	} > $HOME/.config/lxc/default.conf
+
+	# Setup runtime directory
+	echo 'export XDG_RUNTIME_DIR=/run/user/$(id -u $USER)' >> ~/.bashrc
+	export XDG_RUNTIME_DIR=/run/user/$(id -u $USER)
+
+	# Create a systemd user service
+	mkdir -p $HOME/.config/systemd/user
+	{
+		echo "[Unit]"
+		echo "Description=LXC Container %I"
+		echo "After=network.target"
+		echo ""
+		echo "[Service]"
+		echo "Type=forking"
+		echo "ExecStart=/usr/bin/lxc-start -n %i"
+		echo "ExecStop=/usr/bin/lxc-stop -n %i"
+		echo "Restart=on-failure"
+		echo ""
+		echo "[Install]"
+		echo "WantedBy=default.target"
+	} > $HOME/.config/systemd/user/lxc-container@.service
+
+	# Create a container
+	lxc-create -n $container -t download -- --dist debian --release bullseye --arch amd64
+
+	# Start & enable the service
+	systemctl --user enable lxc-container@${container}.service
+	systemctl --user start  lxc-container@${container}.service
+}
+
+setup_container() {
+	# TODO: Provision container for services
+	return
+}
+
+#setup_root
+#setup_user

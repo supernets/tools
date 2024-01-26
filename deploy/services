@@ -1,0 +1,58 @@
+#!/bin/sh
+# SuperNETs tool for Anope services - Developed by acidvegas (https://git.acid.vegas/supertools)
+# requires cmake
+
+ANOPE=$HOME/services
+SOURCE=$HOME/services.source
+
+for pkg in curl git jq make; do
+    if ! command -v $pkg > /dev/null; then
+        echo "error: missing required package '$pkg'"
+        exit 1
+    fi
+done
+
+case "$1" in
+    check)
+        CURRENT=$($ANOPE/bin/services -v | cut -d' ' -f1 | cut -d'-' -f2)
+        LATEST=$(curl -s https://api.github.com/repos/anope/anope/releases/latest | jq -r '.tag_name')
+        if [ "$CURRENT" != "$LATEST" ]; then
+            echo "new version available: $LATEST"
+        fi
+        ;;
+
+    deploy)
+        git clone --depth 1 https://github.com/supernets/anope.git "$SOURCE"
+        cd "$SOURCE" && ./Config -nointro -quick && cd build && make && make install && cd $HOME && rm -rf "$SOURCE"
+        if command -v crontab > /dev/null; then
+            (crontab -l; echo "*/5 * * * * $HOME/services/data/services.chk >/dev/null 2>&1") | crontab -
+            (crontab -l; echo "@reboot     $HOME/services/bin/services") | crontab -
+        elif command -v systemctl > /dev/null; then
+            printf "[Unit]\nDescription=Anope Check Timer\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec=5min\n\n[Install]\nWantedBy=timers.target" > "$HOME/.config/systemd/user/anope.timer"
+            printf "[Unit]\nDescription=Anope Check Service\n\n[Service]\nType=oneshot\nExecStart=$HOME/services/data/services.chk >/dev/null 2>&1" > "$HOME/.config/systemd/user/anope.service"
+			systemctl --user enable anope.timer && systemctl --user start anope.timer
+        else
+            echo "warning: cron/systemd not found on system! (reboot/restart timers not set)"
+        fi
+        for param in host port password seed; do
+            read -p "$param = " VALUE
+            sed -i "s/$param = \"REDACTED\"/$param = \"$VALUE\"/g" "$ANOPE/conf/services.conf"
+        done
+        $ANOPE/bin/services
+        ;;
+
+    update)
+        BACKUP="$ANOPE.backup"
+        mkdir "$BACKUP" && cp "$ANOPE/conf/services.conf" "$BACKUP" && cp "$ANOPE/data/anope.db" "$BACKUP"
+        pkill -9 services && rm -rf "$ANOPE"
+        git clone --depth 1 https://github.com/supernets/anope.git "$SOURCE"
+        cd "$SOURCE" && ./Config -nointro -quick && cd build && make && make install && cd $HOME && rm -rf "$SOURCE"
+        mv "$BACKUP/services.conf" "$ANOPE/conf/"
+        mv "$BACKUP/anope.db" "$ANOPE/data"
+        $ANOPE/bin/services
+        ;;
+
+    *)
+        echo "Usage: $0 {check|deploy|update}"
+        ;;
+esac

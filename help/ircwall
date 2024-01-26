@@ -1,0 +1,70 @@
+#!/bin/sh
+# IRCd Firewall - Developed by acidvegas (https://git.acid.vegas/supertools)
+
+# nano /etc/default/grub
+# Add ipv6.disable=1 to GRUB_CMDLINE_LINUX_DEFAULT then run update-grub
+
+# Configuration
+IP_MAIN="10.0.0.1" # Change this to your IP
+IP_HUB="10.0.0.2"  # Change this to your hub IP
+PORT_SSH=22        # Default 22
+PORT_HUB=5900      # Default 5900
+
+# Kernel hardening settings
+mkdir -p /etc/sysctl.d
+{
+  printf "net.ipv4.conf.all.accept_source_route = 0\n"
+  printf "net.ipv6.conf.all.accept_source_route = 0\n"
+  printf "net.ipv4.conf.all.rp_filter = 1\n"
+  printf "net.ipv4.conf.default.rp_filter = 1\n"
+  printf "net.ipv4.conf.all.accept_redirects = 0\n"
+  printf "net.ipv6.conf.all.accept_redirects = 0\n"
+  printf "net.ipv4.conf.default.accept_redirects = 0\n"
+  printf "net.ipv6.conf.default.accept_redirects = 0\n"
+  printf "net.ipv4.conf.all.log_martians = 1\n"
+  printf "kernel.randomize_va_space = 2\n"
+  printf "fs.suid_dumpable = 0\n"
+} > /etc/sysctl.d/99-custom-hardening.conf
+
+# Apply hardening settings
+sysctl -p /etc/sysctl.d/99-custom-hardening.conf
+
+# Flush existing rules
+iptables -F
+iptables -X
+iptables -t nat -F
+iptables -t nat -X
+iptables -t mangle -F
+iptables -t mangle -X
+
+# Default chain policies
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+iptables -P OUTPUT ACCEPT
+
+# Common Firewall rules
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT -p icmp --icmp-type echo-request -j DROP
+iptables -A INPUT -i lo -j ACCEPT
+
+# Allow SSH
+iptables -A INPUT -p tcp -s $IP_MAIN --dport $PORT_SSH -j ACCEPT
+
+# Allow IRCd Hub
+iptables -A INPUT -p tcp -s $IP_HUB  --dport $PORT_HUB -j ACCEPT
+
+# Allow IRCd Ports
+iptables -A INPUT -p tcp --dport 6660:6669 -j ACCEPT
+iptables -A INPUT -p tcp --dport 7000 -j ACCEPT
+
+# Allow IRCd TLS Ports
+iptables -A INPUT -p tcp --dport 6697 -j ACCEPT
+iptables -A INPUT -p tcp --dport 9999 -j ACCEPT
+
+# Save rules
+apt-get install -y iptables-persistent
+netfilter-persistent save
+systemctl enable netfilter-persistent && systemctl start netfilter-persistent
+
+# Show rules
+iptables -L -v -n
